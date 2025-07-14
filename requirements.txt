@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+selenium
+webdriver-manager
+bs4
+pandas
+requests
+pillow
+pyautogui
+openai
+tiktoken
+python-dotenv 
+easyocr
+gunicorn
