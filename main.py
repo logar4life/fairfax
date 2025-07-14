@@ -16,7 +16,6 @@ import requests
 import re
 from PIL import Image
 from selenium.webdriver.common.action_chains import ActionChains
-import pyautogui
 import openai
 import base64
 from io import BytesIO
