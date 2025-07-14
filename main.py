@@ -16,7 +16,7 @@ import requests
 import re
 from PIL import Image
 from selenium.webdriver.common.action_chains import ActionChains
-
+import pyautogui
 import openai
 import base64
 from io import BytesIO
@@ -26,6 +26,9 @@ import json
 import easyocr
 import tiktoken
 from pathlib import Path
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+import uvicorn
 
 # Load environment variables
 load_dotenv()
@@ -37,6 +40,20 @@ PASSWORD = "Logar4life!"
 # URLs
 LOGIN_URL = "https://www.fairfaxcounty.gov/myfairfax/auth/forms/ffx-choose-login.jsp"
 CPAN_URL = "https://ccr.fairfaxcounty.gov/cpan/"
+
+app = FastAPI()
+
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "Fairfax FastAPI is running."}
+
+@app.post("/run")
+def run_workflow():
+    try:
+        result = run_fairfax_workflow()
+        return JSONResponse(content={"status": "success", "result": result})
+    except Exception as e:
+        return JSONResponse(content={"status": "error", "error": str(e)}, status_code=500)
 
 def setup_driver():
     """Setup Chrome driver with proper configuration"""
@@ -384,23 +401,17 @@ def process_all_screenshots_and_extract():
     except Exception as e:
         print(f"Could not save results to file: {e}")
 
-def main():
+def run_fairfax_workflow():
     driver = None
     try:
         print("Setting up Chrome driver...")
         driver = setup_driver()
-        
         if driver is None:
             print("Failed to setup Chrome driver. Exiting...")
-            return
-        
-        wait = WebDriverWait(driver, 20)  # Increased wait time to 20 seconds
-        
-        # Open the login page
+            return "Failed to setup Chrome driver."
+        wait = WebDriverWait(driver, 20)
         print("Opening login page...")
         driver.get(LOGIN_URL)
-        
-        # Wait for the page to load and find login elements
         print("Waiting for login form to load...")
         try:
             username_field = wait_for_element_with_retry(driver, By.ID, "username")
@@ -408,47 +419,32 @@ def main():
         except Exception as e:
             print(f"Could not find login form elements: {e}")
             print("Trying alternative selectors...")
-            # Try alternative selectors
             try:
                 username_field = wait_for_element_with_retry(driver, By.NAME, "username")
                 password_field = driver.find_element(By.NAME, "password")
             except:
                 username_field = wait_for_element_with_retry(driver, By.XPATH, "//input[@type='text']")
                 password_field = driver.find_element(By.XPATH, "//input[@type='password']")
-        
-        # Fill in the username and password
         print("Entering credentials...")
         username_field.clear()
         username_field.send_keys(USER_ID)
         password_field.clear()
         password_field.send_keys(PASSWORD)
-        
-        # Click the submit button
         print("Submitting login form...")
         try:
             submit_button = driver.find_element(By.XPATH, "//input[@type='submit']")
         except:
             submit_button = driver.find_element(By.XPATH, "//button[@type='submit']")
-        
         safe_click(driver, submit_button, 3)
-        
-        # Wait for login to complete
         print("Waiting for login to complete...")
-        time.sleep(8)  # Increased wait time for login processing
-        
-        # Check if login was successful
+        time.sleep(8)
         try:
-            # Look for some element that indicates successful login
             wait.until(EC.presence_of_element_located((By.XPATH, "//*[contains(text(), 'Welcome') or contains(text(), 'Dashboard') or contains(text(), 'MyFairfax')]")))
             print("Login successful!")
         except:
             print("Login status unclear, proceeding anyway...")
-        
-        # Navigate to CPAN page
         print("Navigating to CPAN page...")
         driver.get(CPAN_URL)
-
-        # Wait for the main search button to be clickable and click it
         print("Waiting for search panel button...")
         try:
             search_button = wait_for_element_with_retry(driver, By.ID, "SearchButton")
@@ -456,119 +452,81 @@ def main():
             print("Search panel button clicked.")
         except Exception as e:
             print(f"Could not click search panel button: {e}")
-            # The search panel might already be open. Let's try to continue.
             pass
-        
-        time.sleep(2) # Increased wait for panel to open
-
-        # Click on 'Land Records'
+        time.sleep(2)
         print("Selecting 'Land Records'...")
         try:
             land_records_button = wait_for_element_with_retry(driver, By.ID, "SideMenu_LandRecords")
             safe_click(driver, land_records_button, 2)
         except Exception as e:
             print(f"Could not click 'Land Records' button: {e}")
-
-        # Select "DOCUMENT TYPE" from the search type dropdown
         print("Selecting 'DOCUMENT TYPE' from dropdown...")
         try:
             search_type_dropdown = Select(wait_for_element_with_retry(driver, By.ID, "LR_SearchType_SearchBy"))
             search_type_dropdown.select_by_value("3")
-            time.sleep(2)  # Wait for dropdown to update
+            time.sleep(2)
         except Exception as e:
             print(f"Could not select 'DOCUMENT TYPE': {e}")
-
-        # Wait for the select element to be present
         try:
             deed_doc_type_select = Select(wait_for_element_with_retry(driver, By.ID, "deedDocTypeDT"))
-
-            # Deselect all first (optional, but good practice)
             deed_doc_type_select.deselect_all()
-
-            # List of values to select
-            values_to_select = ["LP", "ST"]  # Add more as needed
-
+            values_to_select = ["LP", "ST"]
             for value in values_to_select:
                 deed_doc_type_select.select_by_value(value)
-                time.sleep(1)  # Small wait between selections
+                time.sleep(1)
         except Exception as e:
             print(f"Could not select document types: {e}")
-
-        # Select "ALL" from the sub-type dropdown
         print("Selecting 'ALL' from sub-type dropdown...")
-        # Using a brittle XPath as provided by the user. This might need adjustment.
         all_dropdown_xpath = "/html/body/div[1]/form/div/div/div[2]/div/div/div[2]/div/div[2]/div/div[4]/div/div/div[2]/div/select"
         try:
             all_dropdown = Select(wait_for_element_with_retry(driver, By.XPATH, all_dropdown_xpath))
             all_dropdown.select_by_value("")
         except Exception as e:
             print(f"Could not select 'ALL' from the dropdown. It may not exist for this document type. Error: {e}")
-
-        # Set date range
         print("Setting date range...")
-        # Select '7 Days Ago' from the dropdown if present
         try:
             range_dropdown = Select(wait_for_element_with_retry(driver, By.ID, "Search_LRStartDate"))
             range_dropdown.select_by_visible_text("7 Days Ago")
             print("Selected '7 Days Ago' from date range dropdown.")
         except Exception as e:
             print(f"Could not select '7 Days Ago' from dropdown: {e}")
-        
         today = date.today()
         start_date = today.replace(day=1)
         start_date_str = start_date.strftime("%m/%d/%Y")
         end_date_str = today.strftime("%m/%d/%Y")
-
         try:
             start_date_input = wait_for_element_with_retry(driver, By.ID, "LR_startdate")
             driver.execute_script("arguments[0].value = arguments[1];", start_date_input, start_date_str)
-
             end_date_input = wait_for_element_with_retry(driver, By.ID, "LR_enddate")
             driver.execute_script("arguments[0].value = arguments[1];", end_date_input, end_date_str)
         except Exception as e:
             print(f"Could not set date range: {e}")
-        
-        # Click the search button
         print("Clicking search button...")
         try:
             final_search_button = wait_for_element_with_retry(driver, By.ID, "Search")
             safe_click(driver, final_search_button, 3)
         except Exception as e:
             print(f"Could not click search button: {e}")
-
         print(f"Search for {values_to_select} completed. Waiting for results to load...")
-        # Wait for results table to load (up to 60 seconds)
         table_xpath = "/html/body/div[1]/div/div/div[3]/table"
         try:
             table_elem = wait_for_element_with_retry(driver, By.XPATH, table_xpath, timeout=60)
             print("Results table appeared!")
-            
-            # Take screenshot of the search results page
-            print("Taking screenshot of search results page...")
             screenshot_folder = os.path.join("fairfax", "screenshots")
             if not os.path.exists(screenshot_folder):
                 os.makedirs(screenshot_folder)
-            
-            # Generate filename with timestamp
             from datetime import datetime
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             screenshot_filename = f"search_results_{timestamp}.png"
             screenshot_path = os.path.join(screenshot_folder, screenshot_filename)
-            
-            # Take screenshot
             driver.save_screenshot(screenshot_path)
             print(f"Screenshot saved to: {screenshot_path}")
-            
-            # Highlight table border red, header yellow, rows green
             driver.execute_script('arguments[0].style.border = "3px solid red";', table_elem)
             driver.execute_script('var ths = arguments[0].querySelectorAll("thead tr"); for (var i=0; i<ths.length; ++i) { ths[i].style.background = "yellow"; }', table_elem)
             driver.execute_script('var trs = arguments[0].querySelectorAll("tbody tr"); for (var i=0; i<trs.length; ++i) { trs[i].style.background = "lightgreen"; }', table_elem)
-
-            # --- UPDATED LOGIC: For each row, click the details icon to open the PDF details page ---
             pdf_folder = os.path.join("fairfax", "fairfax_pdfs")
             if not os.path.exists(pdf_folder):
                 os.makedirs(pdf_folder)
-            # Screenshot folder for all details page screenshots
             screenshot_folder = os.path.join("fairfax", "screenshots")
             if not os.path.exists(screenshot_folder):
                 os.makedirs(screenshot_folder)
@@ -576,7 +534,6 @@ def main():
             main_window = driver.current_window_handle
             print("Iterating over table rows to download PDFs from details icon...")
             rows = table_elem.find_elements(By.XPATH, ".//tbody/tr")
-            # --- Prepare for row-by-row extraction ---
             all_extraction_results = []
             from openai import OpenAI
             openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -797,7 +754,6 @@ def main():
                 print(f"Screenshot filenames written to {screenshots_list_path}")
             except Exception as e:
                 print(f"Could not write screenshots list: {e}")
-            # --- END UPDATED LOGIC ---
         except Exception as e:
             print(f"Table did not appear after waiting: {e}")
         
@@ -856,7 +812,7 @@ def main():
         if data_found:
             if driver:
                 driver.quit()
-            return
+            return "Data exported to CSV."
 
         # If not the last document type, go back to the search page to prepare for the next search
         if values_to_select != ["LP", "ST"]:
@@ -876,36 +832,32 @@ def main():
         # Keep the browser open for a while to observe the result
         print("All searches completed. Keeping browser open for 5 minutes...")
         time.sleep(400)
-
     except TimeoutException as e:
         print(f"Timeout error occurred: {e}")
         if driver:
             print("Current URL:", driver.current_url)
             print("Page title:", driver.title)
-        time.sleep(10)  # Keep browser open longer for debugging
+        time.sleep(10)
     except WebDriverException as e:
         print(f"WebDriver error occurred: {e}")
         if driver:
             print("Current URL:", driver.current_url)
             print("Page title:", driver.title)
-        time.sleep(10)  # Keep browser open longer for debugging
+        time.sleep(10)
     except Exception as e:
         print(f"An error occurred: {e}")
         if driver:
             print("Current URL:", driver.current_url)
             print("Page title:", driver.title)
-        time.sleep(10)  # Keep browser open longer for debugging
-
+        time.sleep(10)
     finally:
-        # Close the browser
         if driver:
             print("Browser will remain open as requested.")
             pass
-
-    # At the end of main(), after all screenshots are taken:
     print("\n--- Starting OCR and OpenAI extraction for all screenshots ---\n")
     process_all_screenshots_and_extract()
+    return "Workflow completed."
 
 if __name__ == "__main__":
-    main()
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 
