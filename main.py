@@ -98,7 +98,7 @@ def setup_driver():
         return driver
     except Exception as e:
         print(f"Error setting up Chrome driver: {e}")
-        return None
+        return str(e)  # Return the error message
 
 def safe_click(driver, element, wait_time=2):
     """Safely click an element with retry logic"""
@@ -405,9 +405,10 @@ def run_fairfax_workflow():
     try:
         print("Setting up Chrome driver...")
         driver = setup_driver()
-        if driver is None:
-            print("Failed to setup Chrome driver. Exiting...")
-            return "Failed to setup Chrome driver."
+        if driver is None or isinstance(driver, str):
+            error_msg = driver if isinstance(driver, str) else "Failed to setup Chrome driver."
+            print(error_msg)
+            return error_msg
         wait = WebDriverWait(driver, 20)
         print("Opening login page...")
         driver.get(LOGIN_URL)
